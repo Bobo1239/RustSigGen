@@ -1,0 +1,17 @@
+[package]
+name = "signature_generator"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.86"
+chrono = "0.4.38"
+dirs = "5.0.1"
+futures = "0.3.30"
+object = "0.36.0"
+octocrab = "0.38.0"
+regex = "1.10.4"
+reqwest = "0.12.4"
+tempfile = "3.10.1"
+tokio = { version = "1.38.0", features = ["rt", "net"] }
+toml = "0.8.14"
