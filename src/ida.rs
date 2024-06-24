@@ -5,6 +5,7 @@ use std::{
 };
 
 use anyhow::{bail, ensure, Result};
+use log::*;
 use tempfile::TempDir;
 
 use crate::ReleaseWithManifest;
@@ -15,6 +16,8 @@ pub fn generate_signatures(
     release_manifest: &ReleaseWithManifest,
     out_dir: PathBuf,
 ) -> Result<PathBuf> {
+    info!("Generating IDA F.L.I.R.T. signatures...");
+
     // TODO: Fix signature library name (atm IDA outputs `Using FLIRT signature: Unnamed sample library`)
     let bin_path = flair_path.join("bin/linux");
     if !bin_path.exists() {
@@ -33,7 +36,7 @@ pub fn generate_signatures(
         .arg(tmp_dir.path().join("std.pat"))
         .arg(tmp_dir.path().join("std.sig"))
         .output()?;
-    println!(
+    info!(
         "sigmake output: {}",
         str::from_utf8(&output.stderr)?.lines().next().unwrap()
     );
@@ -55,7 +58,7 @@ pub fn generate_signatures(
     std::fs::create_dir_all(&out_dir)?;
     let out_path = out_dir.join(format!("{}.sig", release_manifest.release.path_name()));
     std::fs::copy(tmp_dir.path().join("std.sig"), &out_path)?;
-    println!("Generated {}", out_path.display());
+    info!("Generated {}", out_path.display());
 
     // TODO: zipsig?
 

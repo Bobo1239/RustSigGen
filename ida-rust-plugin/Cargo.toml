@@ -1,0 +1,18 @@
+[package]
+name = "ida-rust-plugin" # TODO: Find a better name...
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.21.1", features = [
+    "anyhow",
+    "experimental-async",
+    "extension-module",
+] }
+tokio = "1.38.0"
+
+signature_generator = { path = ".." }
+pyo3-log = "0.10.0"

@@ -12,6 +12,7 @@ use std::{
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use chrono::{Days, NaiveDate};
+use log::*;
 use regex::bytes::Regex;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -41,6 +42,8 @@ pub fn extract_object_files_to_tmp_dir(
     std_lib: &PathBuf,
     release_manifest: &ReleaseWithManifest,
 ) -> Result<TempDir> {
+    info!("Extracting rust-std...");
+
     let file = BufReader::new(File::open(std_lib)?);
     let mut archive = Archive::new(XzDecoder::new(file));
 
@@ -81,9 +84,7 @@ pub async fn download_std_lib(release: &ReleaseWithManifest, target: Target) -> 
     // TODO: Cache eviction...
     let url = release.rust_std_url(Component::RustStd, target);
 
-    // TODO: Progress bar (https://gist.github.com/Tapanhaz/096e299bf060607b572d700e89a62529)
-    println!("Downloading rust-std for that release... ({})", url);
-
+    info!("Downloading rust-std for that release... ({})", url);
     let sha256 = release.rust_std_sha256(Component::RustStd, target);
     let path = caching_http::download_file(url, Some(sha256)).await?;
     let bytes = std::fs::read(&path)?;
@@ -110,10 +111,10 @@ pub async fn detect_rustc_release(bin: &[u8]) -> Result<(ReleaseWithManifest, Ta
     if !m.all(|m| m == commit_hash) {
         bail!("detected multiple rustc commit hashes")
     }
-    println!("Detected rustc commit hash: {}", commit_hash);
+    info!("Detected rustc commit hash: {}", commit_hash);
 
     let rel_with_manifest = determine_release_from_commit(commit_hash).await?;
-    println!("Detected rustc release: {:?}", rel_with_manifest.release);
+    info!("Detected rustc release: {:?}", rel_with_manifest.release);
 
     // TODO: Target detection
     Ok((rel_with_manifest, Target::X8664LinuxGnu))

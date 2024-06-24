@@ -20,7 +20,11 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::init();
+    env_logger::Builder::from_env(env_logger::Env::new().default_filter_or("info"))
+        .format_timestamp(None)
+        .format_target(false)
+        .init();
+
     let args = Args::parse();
 
     let bin = fs::read(args.bin_path)?;
@@ -29,7 +33,6 @@ async fn main() -> Result<()> {
     let tmp_dir = sig_gen::extract_object_files_to_tmp_dir(&std_lib, &release_manifest)?;
 
     if let Some(flair_path) = args.flair_path {
-        println!("Generating IDA F.L.I.R.T. signatures...");
         sig_gen::ida::generate_signatures(
             &tmp_dir,
             &flair_path,
