@@ -22,7 +22,7 @@ class GenerateSignatures(ida_kernwin.action_handler_t):
 
     def activate(self, ctx):
         print("Starting signature generation...")
-        asyncio.ensure_future(self.generate_and_apply_signature())
+        asyncio.create_task(self.generate_and_apply_signature())
         return 0
 
     def update(self, ctx):
@@ -52,7 +52,7 @@ def register_action():
     )
     if ida_kernwin.register_action(action):
         ida_kernwin.attach_action_to_toolbar("AnalysisToolBar", ACTION_NAME)
-        print("Registed action")
+        print("Registered action")
         return True
     else:
         return False
