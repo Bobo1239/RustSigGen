@@ -10,6 +10,14 @@ TODO: Better name
 ```
 You should now see the `rust:*` actions in your IDA Pro command palette.
 
+### Binary Ninja
+The official "Signature Kit Plugin" must be installed as a prerequisite which can be done using the
+built-in plugin manager.
+```bash
+> just install-binja-plugin
+```
+You should now see the "Generate Rust signatures" command in the command palette.
+
 ## Developer Notes
 - VS Code autocompletion
     - IDA Pro:

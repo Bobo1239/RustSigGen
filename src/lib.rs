@@ -268,6 +268,10 @@ pub struct ReleaseWithManifest {
 }
 
 impl ReleaseWithManifest {
+    pub fn release(&self) -> &Release {
+        &self.release
+    }
+
     fn rust_std_url(&self, component: Component, target: Target) -> Url {
         self.manifest["pkg"][component.key()]["target"][target.key()]["xz_url"]
             .as_str()
@@ -287,14 +291,14 @@ impl ReleaseWithManifest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-enum Release {
+pub enum Release {
     Stable(String),
     Beta(NaiveDate),
     Nightly(NaiveDate),
 }
 
 impl Release {
-    fn path_name(&self) -> String {
+    pub fn path_name(&self) -> String {
         match self {
             Release::Stable(ver) => format!("rust-std-{}", ver.replace('.', "-")),
             Release::Beta(date) => format!("rust-std-beta-{}", date.format("%Y-%m-%d")),
