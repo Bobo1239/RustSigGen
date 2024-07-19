@@ -8,16 +8,18 @@ use anyhow::{bail, ensure, Result};
 use log::*;
 use tempfile::TempDir;
 
-use crate::ReleaseWithManifest;
+use crate::{ReleaseWithManifest, Target};
 
 pub fn generate_signatures(
     tmp_dir: &TempDir,
     flair_path: &Path,
     release_manifest: &ReleaseWithManifest,
+    target: &Target,
     out_dir: PathBuf,
 ) -> Result<PathBuf> {
     info!("Generating IDA F.L.I.R.T. signatures...");
 
+    // TODO: Support running on Windows host
     let bin_path = flair_path.join("bin/linux");
     if !bin_path.exists() {
         bail!("FLAIR directory doesn't seem correct; failed to find `bin/linux`")
@@ -27,12 +29,18 @@ pub fn generate_signatures(
     let sig_path = tmp_dir.path().join("std.sig");
     let exc_path = tmp_dir.path().join("std.exc");
 
-    let status = Command::new(bin_path.join("pelf"))
+    let parser = match target {
+        Target::X8664LinuxGnu => "pelf",
+        Target::X8664WindowsMsvc => "pcf",
+        Target::X8664WindowsGnu => "pcf",
+    };
+
+    let status = Command::new(bin_path.join(parser))
         .arg(tmp_dir.path().join("*.o"))
         .arg(&pat_path)
         .stderr(Stdio::null())
         .status()?;
-    ensure!(status.success(), "pelf failed; non-zero exit code");
+    ensure!(status.success(), "{} failed; non-zero exit code", parser);
 
     let mut sigmake_command = Command::new(bin_path.join("sigmake"));
     sigmake_command

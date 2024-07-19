@@ -2,6 +2,7 @@ use std::{env, fs, path::PathBuf};
 
 use anyhow::Result;
 use clap::{arg, Parser};
+use log::*;
 
 use signature_generator as sig_gen;
 
@@ -16,6 +17,9 @@ struct Args {
     bin_path: PathBuf,
     /// Output directory
     out_path: Option<PathBuf>,
+    /// Keep extracted files (for debugging purposes)
+    #[arg(short, long)]
+    keep_extracted_files: bool,
 }
 
 #[tokio::main]
@@ -37,8 +41,16 @@ async fn main() -> Result<()> {
             &tmp_dir,
             &flair_path,
             &release_manifest,
+            &target,
             args.out_path.map(Ok).unwrap_or_else(env::current_dir)?,
         )?;
+    }
+
+    if args.keep_extracted_files {
+        info!(
+            "Keeping extracted files at {}",
+            tmp_dir.into_path().display()
+        );
     }
 
     Ok(())

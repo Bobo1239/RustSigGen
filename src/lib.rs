@@ -13,6 +13,7 @@ use std::{
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use chrono::{Days, NaiveDate};
 use log::*;
+use object::{Architecture, BinaryFormat, Object};
 use regex::bytes::Regex;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -33,6 +34,7 @@ use xz2::bufread::XzDecoder;
 
 // TODO: Additional target support (see https://doc.rust-lang.org/stable/rustc/platform-support.html)
 // TODO: Detect used crates (only those with panic info)
+// TODO: x86_64-pc-windows-gnu IDA signatures seem to be broken (signature library is too small)
 
 fn cache_dir() -> PathBuf {
     dirs::cache_dir().unwrap().join(env!("CARGO_PKG_NAME"))
@@ -116,8 +118,36 @@ pub async fn detect_rustc_release(bin: &[u8]) -> Result<(ReleaseWithManifest, Ta
     let rel_with_manifest = determine_release_from_commit(commit_hash).await?;
     info!("Detected rustc release: {:?}", rel_with_manifest.release);
 
-    // TODO: Target detection
-    Ok((rel_with_manifest, Target::X8664LinuxGnu))
+    let file = object::File::parse(bin)?;
+    let target = match file.format() {
+        BinaryFormat::Elf => {
+            if file.architecture() == Architecture::X86_64 {
+                Target::X8664LinuxGnu
+            } else {
+                unimplemented!("unsupported ELF architecture: {:?}", file.architecture())
+            }
+        }
+        BinaryFormat::Pe => {
+            if file.is_64() {
+                if Regex::new("/build/mingw-w64-crt/src/")
+                    .unwrap()
+                    .is_match(bin)
+                {
+                    warn!("This target currently doesn't work properly!");
+                    Target::X8664WindowsGnu
+                } else {
+                    Target::X8664WindowsMsvc
+                }
+            } else {
+                unimplemented!("unsupported 32-bit PE binary")
+            }
+        }
+        f => unimplemented!("unsupported binary format: {f:?}"),
+    };
+
+    info!("Detected binary platform: {:?}", target.key());
+
+    Ok((rel_with_manifest, target))
 }
 
 pub async fn get_manifest_and_hash(
@@ -134,7 +164,10 @@ pub async fn get_manifest_and_hash(
     };
     let manifest = caching_http::get_string(&manifest_url).await?;
 
-    if manifest.contains("<Error><Code>NoSuchKey</Code>") {
+    // NOTE: I've observed these errors already but not sure why both can occur...
+    if manifest.contains("<Error><Code>NoSuchKey</Code>")
+        || manifest.contains("<title>Not Found</title>")
+    {
         Ok(None)
     } else {
         let table = manifest.parse::<Table>().unwrap();
@@ -323,12 +356,16 @@ impl Component {
 #[derive(Debug, Clone, Copy)]
 pub enum Target {
     X8664LinuxGnu,
+    X8664WindowsMsvc,
+    X8664WindowsGnu,
 }
 
 impl Target {
     fn key(&self) -> &'static str {
         match self {
             Target::X8664LinuxGnu => "x86_64-unknown-linux-gnu",
+            Target::X8664WindowsMsvc => "x86_64-pc-windows-msvc",
+            Target::X8664WindowsGnu => "x86_64-pc-windows-gnu",
         }
     }
 }
