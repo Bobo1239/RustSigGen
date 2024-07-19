@@ -133,7 +133,6 @@ pub async fn detect_rustc_release(bin: &[u8]) -> Result<(ReleaseWithManifest, Ta
                     .unwrap()
                     .is_match(bin)
                 {
-                    warn!("This target currently doesn't work properly!");
                     Target::X8664WindowsGnu
                 } else {
                     Target::X8664WindowsMsvc
