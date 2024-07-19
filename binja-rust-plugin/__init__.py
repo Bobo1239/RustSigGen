@@ -3,7 +3,6 @@ import logging
 import multiprocessing as mp
 import shutil
 import traceback
-import time
 from pathlib import Path
 
 import binaryninja
@@ -30,7 +29,7 @@ async def generate_rust_signatures(bv):
         new_bv.update_analysis()
 
     while True:
-        time.sleep(0.1)
+        await asyncio.sleep(0.1)
         with remaining.get_lock():
             if remaining.value == 0:
                 break
