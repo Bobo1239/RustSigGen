@@ -195,6 +195,7 @@ pub async fn determine_release_from_commit(commit_hash: &str) -> Result<ReleaseW
     };
 
     if let Some(resolved) = cached.get(commit_hash) {
+        debug!("cache hit: commit hash");
         let manifest = caching_http::get_string(&resolved.manifest_url).await?;
         let manifest = manifest.parse::<Table>().unwrap();
         assert_eq!(

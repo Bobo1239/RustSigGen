@@ -41,14 +41,14 @@ pub async fn download_file<T: IntoUrl>(
             let mut hasher = Sha256::new();
             hasher.update(&bytes);
             if hasher.finalize() == expected_sha256.into() {
-                debug!("cache hit");
+                debug!("cache hit: http");
                 return Ok(out_path);
             } else {
                 fs::remove_file(&out_path)?;
                 // Continue with normal download process
             }
         } else {
-            debug!("cache hit");
+            debug!("cache hit: http");
             return Ok(out_path);
         }
     }
