@@ -11,8 +11,9 @@ use crate::cache_dir;
 pub async fn get_string<T: IntoUrl>(url: T) -> Result<String> {
     let url = url.into_url()?;
 
-    // TODO: Use std::cell::LazyLock once stabilized (1.80)
-    let re = Regex::new(r"^/dist/\d{4}-\d{2}-\d{2}/").unwrap();
+    // We cache URLs which are either dated or are a full version number (so x.y.z).
+    let re =
+        Regex::new(r"^((/dist/\d{4}-\d{2}-\d{2}/)|(/dist/channel-rust-\d+.\d+.\d+.toml))").unwrap();
     let should_cache = url.domain().unwrap() == "static.rust-lang.org" && re.is_match(url.path());
 
     if should_cache {
