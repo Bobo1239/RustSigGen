@@ -70,7 +70,7 @@ pub fn extract_object_files_to_tmp_dir(
 
                     if name.ends_with(".o") {
                         let data = member.data(&*buf)?;
-                        fs::write(tmp_dir.path().join(name), data)?;
+                        fs::write(tmp_dir.path().join(name.replace('/', "\\")), data)?;
                         // let object_file = object::File::parse(data)?;
                     }
                 }
