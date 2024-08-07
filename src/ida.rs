@@ -36,7 +36,7 @@ pub fn generate_signatures(
     };
 
     let status = Command::new(bin_path.join(parser))
-        .arg("-S") // TODO: Check that this doesn't have bad effects on non-MinGW binaries
+        .arg("-S") // "split functions inside sections"; Required for Windows MinGW for some reason
         .arg(tmp_dir.path().join("*.o"))
         .arg(&pat_path)
         .stderr(Stdio::null())
