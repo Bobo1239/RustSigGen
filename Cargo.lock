@@ -1712,6 +1712,7 @@ dependencies = [
  "octocrab",
  "regex",
  "reqwest",
+ "rustc-demangle",
  "serde",
  "serde_json",
  "sha2",
