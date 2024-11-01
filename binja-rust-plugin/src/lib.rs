@@ -33,7 +33,7 @@ async fn signature_library_name(bin_path: PathBuf) -> PyResult<String> {
         .spawn(async move {
             let bin = fs::read(bin_path)?;
             let (release_manifest, _) = sig_gen::detect_rustc_release(&bin).await?;
-            Ok(release_manifest.release().path_name())
+            Ok(release_manifest.release().signature_base_file_name())
         })
         .await
         .unwrap()

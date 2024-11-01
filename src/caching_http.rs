@@ -32,6 +32,7 @@ pub async fn download_file<T: IntoUrl>(
 ) -> Result<PathBuf> {
     let url = url.into_url()?;
     let out_path = cache_dir()
+        .join("http")
         .join(url.domain().unwrap())
         .join(url.path().trim_matches('/'));
 
@@ -41,14 +42,14 @@ pub async fn download_file<T: IntoUrl>(
             let mut hasher = Sha256::new();
             hasher.update(&bytes);
             if hasher.finalize() == expected_sha256.into() {
-                debug!("cache hit: http");
+                trace!("cache hit: http");
                 return Ok(out_path);
             } else {
                 fs::remove_file(&out_path)?;
                 // Continue with normal download process
             }
         } else {
-            debug!("cache hit: http");
+            trace!("cache hit: http");
             return Ok(out_path);
         }
     }

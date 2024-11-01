@@ -23,8 +23,8 @@ async fn generate_signature_for_bin(
             let std_lib = sig_gen::download_std_lib(&release_manifest, target).await?;
             let tmp_dir = sig_gen::extract_object_files_to_tmp_dir(&std_lib, &release_manifest)?;
 
-            sig_gen::ida::generate_signatures(
-                &tmp_dir,
+            sig_gen::ida::generate_signatures_for_std(
+                tmp_dir.path(),
                 &flair_path,
                 &release_manifest,
                 &target,

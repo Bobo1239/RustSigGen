@@ -5,41 +5,64 @@ use std::{
     str,
 };
 
+use crate::{ReleaseWithManifest, Target};
 use anyhow::{bail, ensure, Result};
 use log::*;
 use rustc_demangle::Demangle;
-use tempfile::TempDir;
 
-use crate::{ReleaseWithManifest, Target};
-
-pub fn generate_signatures(
-    tmp_dir: &TempDir,
+pub fn generate_signatures_for_std(
+    std_tmp_path: &Path,
     flair_path: &Path,
     release_manifest: &ReleaseWithManifest,
     target: &Target,
     out_dir: PathBuf,
 ) -> Result<PathBuf> {
+    let out_path = out_dir.join(format!(
+        "{}.sig",
+        release_manifest.release.signature_base_file_name()
+    ));
+    generate_signatures(
+        flair_path,
+        std_tmp_path,
+        &[std_tmp_path.to_str().unwrap().to_owned() + "/*.o"],
+        target,
+        &release_manifest.release.signature_base_file_name(),
+        &out_path,
+    )?;
+    Ok(out_path)
+}
+
+pub fn generate_signatures(
+    flair_path: &Path,
+    tmp_path: &Path,
+    input_globs: &[String],
+    target: &Target,
+    library_name: &str,
+    out_path: &Path,
+) -> Result<()> {
     info!("Generating IDA F.L.I.R.T. signatures...");
 
-    // TODO: Support running on Windows host
-    let bin_path = flair_path.join("bin/linux");
-    if !bin_path.exists() {
-        bail!("FLAIR directory doesn't seem correct; failed to find `bin/linux`")
-    }
+    // TODO: Support for running on Windows/macOS host
+    let bin_path = flair_path.join("bin/x64linux"); // FIXME: IDA 8.4 path is `bin/linux`; need to check which is available
+    ensure!(
+        bin_path.exists(),
+        "FLAIR directory doesn't seem correct; failed to find `bin/x64linux`"
+    );
 
-    let pat_path = tmp_dir.path().join("std.pat");
-    let sig_path = tmp_dir.path().join("std.sig");
-    let exc_path = tmp_dir.path().join("std.exc");
+    let pat_path = tmp_path.join("flirt.pat");
+    let sig_path = tmp_path.join("flirt.sig");
+    let exc_path = tmp_path.join("flirt.exc");
 
     let parser = match target {
         Target::X8664LinuxGnu => "pelf",
+        Target::X8664LinuxMusl => "pelf",
         Target::X8664WindowsMsvc => "pcf",
         Target::X8664WindowsGnu => "pcf",
     };
 
     let status = Command::new(bin_path.join(parser))
         .arg("-S") // "split functions inside sections"; Required for Windows MinGW for some reason
-        .arg(tmp_dir.path().join("*.o"))
+        .args(input_globs)
         .arg(&pat_path)
         .stderr(Stdio::null())
         .status()?;
@@ -47,24 +70,39 @@ pub fn generate_signatures(
 
     let mut sigmake_command = Command::new(bin_path.join("sigmake"));
     sigmake_command
-        .arg(format!("-n{}", release_manifest.release.path_name()))
+        .arg(format!("-n{}", library_name))
         .arg(&pat_path)
         .arg(&sig_path);
 
-    // Not checking for exit code here since it will be non-zero on collisions (which we expect)
     let output = sigmake_command.output()?;
-    info!(
-        "sigmake output: {}",
-        str::from_utf8(&output.stderr)?.lines().next().unwrap()
-    );
+    // If successful we have our .sig file; otherwise we need to resolve conflicts and try again
+    if !output.status.success() {
+        let output_stderr = str::from_utf8(&output.stderr)?;
+        info!("sigmake output: {}", output_stderr);
+        if output_stderr.contains("NO LIBRARY MODULES ARE FOUND") {
+            bail!("Can't generate signatures.")
+        }
 
-    let exc = std::fs::read_to_string(&exc_path)?;
-    let resolved_exc = resolve_conflicts(&exc);
-    std::fs::write(&exc_path, resolved_exc)?;
+        let exc = std::fs::read_to_string(&exc_path)?;
+        let resolved_exc = resolve_conflicts(&exc);
+        std::fs::write(&exc_path, resolved_exc)?;
 
-    // sigmake doesn't emit anything if there were no errors
-    let status = sigmake_command.status()?;
-    ensure!(status.success(), "sigmake failed; non-zero exit code");
+        // sigmake doesn't emit anything if there were no errors
+        let output = sigmake_command.output()?;
+        // TODO: This is a workaround for an IDA bug and should be removed in the future; After
+        //       conflict resolution sigmake shouldn't be able to fail again...
+        if !output.status.success() {
+            let output_stderr = str::from_utf8(&output.stderr)?;
+            info!("sigmake output: {}", output_stderr);
+
+            let exc = std::fs::read_to_string(&exc_path)?;
+            let resolved_exc = resolve_conflicts(&exc);
+            std::fs::write(&exc_path, resolved_exc)?;
+
+            let status = sigmake_command.status()?;
+            ensure!(status.success(), "sigmake failed; non-zero exit code");
+        }
+    }
 
     let output = Command::new(bin_path.join("zipsig"))
         .arg(&sig_path)
@@ -72,12 +110,10 @@ pub fn generate_signatures(
     info!("zipsig output: {}", str::from_utf8(&output.stdout)?.trim());
     ensure!(status.success(), "zipsig failed; non-zero exit code");
 
-    std::fs::create_dir_all(&out_dir)?;
-    let out_path = out_dir.join(format!("{}.sig", release_manifest.release.path_name()));
-    std::fs::copy(sig_path, &out_path)?;
+    std::fs::create_dir_all(out_path.parent().unwrap())?;
+    std::fs::copy(sig_path, out_path)?;
     info!("Generated {}", out_path.display());
-
-    Ok(out_path)
+    Ok(())
 }
 
 fn resolve_conflicts(exc: &str) -> String {
@@ -85,9 +121,20 @@ fn resolve_conflicts(exc: &str) -> String {
     let mut conflicts = 0;
     let mut resolved = 0;
     // Skip first block which just contains instructions for how to resolve conflicts
-    for block in exc.split("\n\n").skip(1) {
+    'outer: for block in exc.split("\n\n") {
+        let mut already_resolved = false;
         let mut candidates = Vec::new();
         for (i, line) in block.lines().enumerate() {
+            // Skip instructions block
+            if line == ";--------- (delete these lines to allow sigmake to read this file)" {
+                continue 'outer;
+            }
+
+            // This block is already resolved from a previous run
+            if line.starts_with("+") {
+                already_resolved = true;
+            }
+
             let raw_sym = line.split("\t").next().unwrap().trim();
             candidates.push(match rustc_demangle::try_demangle(raw_sym) {
                 Ok(demangle) => SymbolType::Rust(demangle, i),
@@ -95,65 +142,74 @@ fn resolve_conflicts(exc: &str) -> String {
             });
         }
 
-        // Our ordering sorts Rust symbols to the beginning
-        candidates.sort();
-
-        debug!("Unresolved conflicts:");
-        let selection = match &candidates[..] {
-            [sym] => {
-                // Only one option!? Possibly a sigmake bug?
-                debug!("Singular conflict: {}", sym.demangled());
-                // We must not select this one since it would cause sigmake to stop with conflicts
-                // again.
-                None
+        if already_resolved {
+            for l in block.lines() {
+                new_exc.push_str(l);
+                new_exc.push('\n');
             }
-            // NOTE: Intrinsics are provided by https://github.com/rust-lang/compiler-builtins. (https://github.com/rust-lang/rust/blob/91376f416222a238227c84a848d168835ede2cc3/library/std/Cargo.toml#L20)
-            //       Can be useful to understand why certain implementations have the same asm.
-            [rs_sym @ SymbolType::Rust(_, rs_idx), rest @ ..]
-                if rs_sym.demangled().starts_with("compiler_builtins::")
-                    && rest.iter().all(|s| {
-                        if let SymbolType::Other(s, _) = s {
-                            s.starts_with("__")
-                        } else {
-                            false
-                        }
-                    }) =>
-            {
-                Some(*rs_idx)
-            }
-            candidates
-                if candidates
-                    .iter()
-                    .all(|s| s.demangled_no_hash() == candidates[0].demangled_no_hash()) =>
-            {
-                Some(0)
-            }
-            _ => {
-                for s in candidates {
-                    debug!("{:?}", s);
-                }
-                debug!("---");
-                None
-            }
-        };
-
-        for (i, l) in block.lines().enumerate() {
-            if selection == Some(i) {
-                new_exc.push('+');
-            }
-            new_exc.push_str(l);
             new_exc.push('\n');
-        }
-        new_exc.push('\n');
+        } else {
+            // Our ordering sorts Rust symbols to the beginning
+            candidates.sort();
 
-        conflicts += 1;
-        if selection.is_some() {
-            resolved += 1;
+            let selection = match &candidates[..] {
+                [sym] => {
+                    // TODO: Only one option!? Possibly a sigmake bug? (already reported to kirschju)
+                    debug!("Singular conflict: {}", sym.demangled());
+                    // We must not select the singular one since it causes sigmake to stop with
+                    // conflicts again.
+                    // Some(0)
+                    None
+                }
+                // NOTE: Intrinsics are provided by https://github.com/rust-lang/compiler-builtins. (https://github.com/rust-lang/rust/blob/91376f416222a238227c84a848d168835ede2cc3/library/std/Cargo.toml#L20)
+                //       Can be useful to understand why certain implementations have the same asm.
+                [rs_sym @ SymbolType::Rust(_, rs_idx), rest @ ..]
+                    if rs_sym.demangled().starts_with("compiler_builtins::")
+                        && rest.iter().all(|s| {
+                            if let SymbolType::Other(s, _) = s {
+                                s.starts_with("__")
+                            } else {
+                                false
+                            }
+                        }) =>
+                {
+                    Some(*rs_idx)
+                }
+                candidates
+                    if candidates
+                        .iter()
+                        .all(|s| s.demangled_no_hash() == candidates[0].demangled_no_hash()) =>
+                {
+                    Some(0)
+                }
+                _ => {
+                    debug!("Unresolved conflicts:");
+                    for s in candidates {
+                        debug!("{:?}", s);
+                    }
+                    debug!("---");
+                    None
+                }
+            };
+
+            for (i, l) in block.lines().enumerate() {
+                if selection == Some(i) {
+                    new_exc.push('+');
+                }
+                new_exc.push_str(l);
+                new_exc.push('\n');
+            }
+            new_exc.push('\n');
+
+            conflicts += 1;
+            if selection.is_some() {
+                resolved += 1;
+            }
         }
     }
 
     info!("Resolved {}/{} signature conflicts.", resolved, conflicts);
-    new_exc.trim().to_owned()
+    new_exc.to_owned()
 }
 
 #[derive(Debug)]
