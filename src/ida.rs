@@ -17,6 +17,7 @@ pub fn generate_signatures_for_std(
     target: &Target,
     out_dir: PathBuf,
 ) -> Result<PathBuf> {
+    // FIXME: Output path doesn't contain target name atm which it should
     let out_path = out_dir.join(format!(
         "{}.sig",
         release_manifest.release.signature_base_file_name()

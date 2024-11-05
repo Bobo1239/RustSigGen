@@ -1,14 +1,20 @@
+ida_build_path := "target/ida-plugin"
+ida_install_path := "~/.idapro/plugins/ida-rust-plugin"
+
 ida-plugin:
     cargo build --release -p ida-rust-plugin
-    mkdir -p target/ida-plugin
-    cp target/release/libida_rust_plugin.so ./target/ida-plugin/ida_rust_plugin.so
-    cp ida-rust-plugin/ida-rust-plugin.py ./target/ida-plugin/
-    cp -n ida-rust-plugin/ida-rust-plugin.cfg ./target/ida-plugin/
+    mkdir -p {{ida_build_path}}
+    cp target/release/libida_rust_plugin.so {{ida_build_path}}/ida_rust_plugin.so
+    cp ida-rust-plugin/ida-plugin.json {{ida_build_path}}
+    cp ida-rust-plugin/ida-rust-plugin.py {{ida_build_path}}
+    cp ida-rust-plugin/ida-rust-plugin.cfg {{ida_build_path}}
 
 install-ida-plugin: ida-plugin
-    cp target/ida-plugin/ida_rust_plugin.so ~/.idapro/plugins/
-    cp target/ida-plugin/ida-rust-plugin.py ~/.idapro/plugins/
-    cp -n ida-rust-plugin/ida-rust-plugin.cfg ~/.idapro/plugins/
+    mkdir -p {{ida_install_path}}
+    cp {{ida_build_path}}/ida_rust_plugin.so {{ida_install_path}}
+    cp {{ida_build_path}}/ida-plugin.json {{ida_install_path}}
+    cp {{ida_build_path}}/ida-rust-plugin.py {{ida_install_path}}
+    cp -n ida-rust-plugin/ida-rust-plugin.cfg {{ida_install_path}}
 
 binja-plugin:
     cargo build --release -p binja-rust-plugin

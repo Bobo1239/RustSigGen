@@ -6,27 +6,18 @@ from pathlib import Path
 
 import ida_diskio
 import ida_funcs
-import ida_kernwin
+import ida_idaapi
 import ida_nalt
-import ida_rust_plugin
 import qasync
 from PyQt5.QtWidgets import QApplication
 
-ACTION_DESCRIPTION = "Generate Rust signatures"
-ACTION_NAME = "rust:generate_signatures"
+import ida_rust_plugin
 
 
-class GenerateSignatures(ida_kernwin.action_handler_t):
-    def __init__(self):
-        ida_kernwin.action_handler_t.__init__(self)
-
-    def activate(self, ctx):
+class RustSignatureGenerator(ida_idaapi.plugmod_t):
+    def run(self, arg):
         print("Starting signature generation...")
         asyncio.create_task(self.generate_and_apply_signature())
-        return 0
-
-    def update(self, ctx):
-        return ida_kernwin.AST_ENABLE_ALWAYS
 
     async def generate_and_apply_signature(self):
         # Get the path of the original binary
@@ -46,27 +37,23 @@ class GenerateSignatures(ida_kernwin.action_handler_t):
         ida_funcs.plan_to_apply_idasgn(sig_path)
 
 
-def register_action():
-    action = ida_kernwin.action_desc_t(
-        ACTION_NAME, ACTION_DESCRIPTION, GenerateSignatures()
-    )
-    if ida_kernwin.register_action(action):
-        ida_kernwin.attach_action_to_toolbar("AnalysisToolBar", ACTION_NAME)
-        print("Registered action")
-        return True
-    else:
-        return False
+class RustSignatureGeneratorPlugin(ida_idaapi.plugin_t):
+    flags = ida_idaapi.PLUGIN_UNL | ida_idaapi.PLUGIN_MULTI
+    help = "TODO"
+    wanted_name = "Rust Signature Generator"
+
+    def init(self):
+        LOG_FORMAT = "[%(levelname)s] %(message)s"
+        logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
+
+        # Set asyncio event loop to the QT one; without this the GUI freezes during script runtime and
+        # strange Rust crashes occur
+        asyncio.set_event_loop(
+            qasync.QEventLoop(QApplication.instance(), already_running=True)
+        )
+
+        return RustSignatureGenerator()
 
 
-LOG_FORMAT = "%(levelname)s %(message)s"
-logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
-
-# Set asyncio event loop to the QT one; without this the GUI freezes during script runtime and
-# strange Rust crashes occur
-asyncio.set_event_loop(qasync.QEventLoop(QApplication.instance(), already_running=True))
-
-# Try registering action; can fail if we're reloading this script so we may need to retry
-if not register_action():
-    # Related cleanup (e.g. menu items) will be done automatically
-    ida_kernwin.unregister_action(ACTION_NAME)
-    register_action()
+def PLUGIN_ENTRY():
+    return RustSignatureGeneratorPlugin()

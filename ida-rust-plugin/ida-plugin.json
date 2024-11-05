@@ -1,0 +1,7 @@
+{
+    "IDAMetadataDescriptorVersion": 1,
+    "plugin": {
+        "name": "Rust Signature Generator",
+        "entryPoint": "ida-rust-plugin.py"
+    }
+}
