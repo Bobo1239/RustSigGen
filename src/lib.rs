@@ -82,7 +82,8 @@ pub fn extract_object_files_to_tmp_dir(
                     let member = member?;
                     let name = str::from_utf8(member.name())?;
 
-                    if name.ends_with(".o") {
+                    // `.lo` files appear in `libc.a` for musl target
+                    if name.ends_with(".o") || name.ends_with(".lo") {
                         let data = member.data(&*buf)?;
                         fs::write(tmp_dir.path().join(name.replace('/', "\\")), data)?;
                     }
@@ -91,6 +92,10 @@ pub fn extract_object_files_to_tmp_dir(
             p if p.extension() == Some(OsStr::new("o")) => {
                 let mut f = File::create(tmp_dir.path().join(p.file_name().unwrap()))?;
                 std::io::copy(&mut file, &mut f)?;
+            }
+            p if p.extension() == Some(OsStr::new("lo")) => {
+                // Just a sanity check for now
+                unreachable!();
             }
             _ => {}
         }
@@ -148,9 +153,10 @@ pub async fn detect_rustc_release(bin: &[u8]) -> Result<(ReleaseWithManifest, Ta
                 //       binaries is one of the main reasons for using musl. Rust even defaults to
                 //       full static linking when using the musl target target though this may
                 //       change in the future: https://github.com/rust-lang/compiler-team/issues/422
-                // TODO: Do we get signatures for the musl libc functions? (confirm that Rust
-                //       bundles musl and doesn't use system musl; rust CI setup:
-                //       https://github.com/rust-lang/rust/blob/master/src/ci/docker/scripts/musl-toolchain.sh)
+                // NOTE: musl libc is bundled together with rustc so we don't have to make any
+                //       special considerations for multiple musl versions. Bundled version can be
+                //       seen in:
+                //       https://github.com/rust-lang/rust/blob/master/src/ci/docker/scripts/musl-toolchain.sh
                 (Architecture::X86_64, true) => Target::X8664LinuxMusl,
                 (a, s) => unimplemented!(
                     "unsupported ELF architecture: {:?} (statically linked: {})",

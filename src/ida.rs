@@ -22,10 +22,14 @@ pub fn generate_signatures_for_std(
         "{}.sig",
         release_manifest.release.signature_base_file_name()
     ));
+    let std_tmp_path_str = std_tmp_path.to_str().unwrap();
     generate_signatures(
         flair_path,
         std_tmp_path,
-        &[std_tmp_path.to_str().unwrap().to_owned() + "/*.o"],
+        &[
+            std_tmp_path_str.to_owned() + "/*.o",
+            std_tmp_path_str.to_owned() + "/*.lo",
+        ],
         target,
         &release_manifest.release.signature_base_file_name(),
         &out_path,
@@ -61,6 +65,11 @@ pub fn generate_signatures(
         Target::X8664WindowsGnu => "pcf",
     };
 
+    // `pelf` contains if one of the globs doesn't have any matches so we have to filter them out
+    let input_globs: Vec<_> = input_globs
+        .iter()
+        .filter(|glob| glob::glob(glob).unwrap().next().is_some())
+        .collect();
     let status = Command::new(bin_path.join(parser))
         .arg("-S") // "split functions inside sections"; Required for Windows MinGW for some reason
         .args(input_globs)
