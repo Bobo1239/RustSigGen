@@ -63,6 +63,8 @@ pub fn generate_signatures(
         Target::X8664LinuxMusl => "pelf",
         Target::X8664WindowsMsvc => "pcf",
         Target::X8664WindowsGnu => "pcf",
+        Target::I686WindowsMsvc => "pcf",
+        Target::I686WindowsGnu => "pcf",
     };
 
     // `pelf` contains if one of the globs doesn't have any matches so we have to filter them out

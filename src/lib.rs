@@ -166,24 +166,21 @@ pub async fn detect_rustc_release(bin: &[u8]) -> Result<(ReleaseWithManifest, Ta
             }
         }
         BinaryFormat::Pe => {
-            if file.is_64() {
-                // TODO: Apparently this isn't sufficient?
-                //       (https://nofix.re/posts/2024-23-05-rust-mingw/) Investigate whether mingw
-                //       is provided by the compiler runtime environment or shipped with rustc.
-                //       Apparently it depends... https://github.com/rust-lang/rust/pull/67429
-                //       The rust-mingw rustup component contains the bundled MinGW libraries so we
-                //       could generate signatures for that at least.
-                // TODO: There's also a new x86_64-pc-windows-gnullvm target...
-                if Regex::new("Mingw-w64 runtime failure:")
-                    .unwrap()
-                    .is_match(bin)
-                {
-                    Target::X8664WindowsGnu
-                } else {
-                    Target::X8664WindowsMsvc
-                }
-            } else {
-                unimplemented!("unsupported 32-bit PE binary")
+            // TODO: Apparently this isn't sufficient?
+            //       (https://nofix.re/posts/2024-23-05-rust-mingw/) Investigate whether mingw is
+            //       provided by the compiler runtime environment or shipped with rustc.
+            //       Apparently it depends... https://github.com/rust-lang/rust/pull/67429
+            //       The rust-mingw rustup component contains the bundled MinGW libraries so we
+            //       could generate signatures for that at least.
+            // TODO: There's also a new x86_64-pc-windows-gnullvm target...
+            let is_mingw = Regex::new("Mingw-w64 runtime failure:")
+                .unwrap()
+                .is_match(bin);
+            match (file.is_64(), is_mingw) {
+                (true, true) => Target::X8664WindowsGnu,
+                (true, false) => Target::X8664WindowsMsvc,
+                (false, true) => Target::I686WindowsGnu,
+                (false, false) => Target::I686WindowsMsvc,
             }
         }
         f => unimplemented!("unsupported binary format: {f:?}"),
@@ -412,6 +409,8 @@ pub enum Target {
     X8664LinuxMusl,
     X8664WindowsMsvc,
     X8664WindowsGnu,
+    I686WindowsMsvc,
+    I686WindowsGnu,
 }
 
 impl Target {
@@ -421,6 +420,8 @@ impl Target {
             Target::X8664LinuxMusl => "x86_64-unknown-linux-musl",
             Target::X8664WindowsMsvc => "x86_64-pc-windows-msvc",
             Target::X8664WindowsGnu => "x86_64-pc-windows-gnu",
+            Target::I686WindowsMsvc => "i686-pc-windows-msvc",
+            Target::I686WindowsGnu => "i686-pc-windows-gnu",
         }
     }
 }
