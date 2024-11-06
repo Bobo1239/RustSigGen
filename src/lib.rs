@@ -167,8 +167,12 @@ pub async fn detect_rustc_release(bin: &[u8]) -> Result<(ReleaseWithManifest, Ta
         }
         BinaryFormat::Pe => {
             if file.is_64() {
-                // TODO: Apparently this isn't sufficient?; https://nofix.re/posts/2024-23-05-rust-mingw/
-                //       Investigate whether mingw is provided by the compiler runtime environment or shipped with rustc
+                // TODO: Apparently this isn't sufficient?
+                //       (https://nofix.re/posts/2024-23-05-rust-mingw/) Investigate whether mingw
+                //       is provided by the compiler runtime environment or shipped with rustc.
+                //       Apparently it depends... https://github.com/rust-lang/rust/pull/67429
+                //       The rust-mingw rustup component contains the bundled MinGW libraries so we
+                //       could generate signatures for that at least.
                 // TODO: There's also a new x86_64-pc-windows-gnullvm target...
                 if Regex::new("Mingw-w64 runtime failure:")
                     .unwrap()
