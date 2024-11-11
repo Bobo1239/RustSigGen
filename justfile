@@ -1,3 +1,5 @@
+set dotenv-load
+
 ida_build_path := "target/ida-plugin"
 ida_install_path := "~/.idapro/plugins/ida-rust-plugin"
 
@@ -24,3 +26,6 @@ binja-plugin:
 
 install-binja-plugin: binja-plugin
     -ln -s -T -r target/binja-plugin ~/.binaryninja/plugins/binja-rust-plugin
+
+run *args:
+    mold -run cargo run -- -f $IDA_FLAIR_PATH {{args}}
