@@ -24,7 +24,11 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    std::env::set_var("RUST_BACKTRACE", "1");
+    // Enable backtraces by default
+    if std::env::var_os("RUST_BACKTRACE").is_none() {
+        std::env::set_var("RUST_BACKTRACE", "1");
+    }
+
     env_logger::Builder::from_env(env_logger::Env::new().default_filter_or("info"))
         .format_timestamp(None)
         .format_target(false)
