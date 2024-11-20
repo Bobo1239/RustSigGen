@@ -20,7 +20,7 @@ pub fn generate_signatures_for_std(
     // FIXME: Output path doesn't contain target name atm which it should
     let out_path = out_dir.join(format!(
         "{}.sig",
-        release_manifest.release.signature_base_file_name()
+        release_manifest.release.std_signature_base_file_name()
     ));
     let std_tmp_path_str = std_tmp_path.to_str().unwrap();
     generate_signatures(
@@ -31,7 +31,7 @@ pub fn generate_signatures_for_std(
             std_tmp_path_str.to_owned() + "/*.lo",
         ],
         target,
-        &release_manifest.release.signature_base_file_name(),
+        &release_manifest.release.std_signature_base_file_name(),
         &out_path,
     )?;
     Ok(out_path)

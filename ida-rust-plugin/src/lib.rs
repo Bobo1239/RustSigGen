@@ -3,7 +3,7 @@ use std::{fs, path::PathBuf, sync::OnceLock};
 use pyo3::prelude::*;
 use tokio::runtime::Runtime;
 
-use signature_generator as sig_gen;
+use signature_generator::{ida, std_sigs};
 
 fn tokio() -> &'static Runtime {
     static RT: OnceLock<Runtime> = OnceLock::new();
@@ -19,11 +19,11 @@ async fn generate_signature_for_bin(
     let sig_file = tokio()
         .spawn(async move {
             let bin = fs::read(bin_path)?;
-            let (release_manifest, target) = sig_gen::detect_rustc_release(&bin).await?;
-            let std_lib = sig_gen::download_std_lib(&release_manifest, target).await?;
-            let tmp_dir = sig_gen::extract_object_files_to_tmp_dir(&std_lib, &release_manifest)?;
+            let (release_manifest, target) = std_sigs::detect_rustc_release(&bin).await?;
+            let std_lib = std_sigs::download_std_lib(&release_manifest, target).await?;
+            let tmp_dir = std_sigs::extract_object_files_to_tmp_dir(&std_lib, &release_manifest)?;
 
-            sig_gen::ida::generate_signatures_for_std(
+            ida::generate_signatures_for_std(
                 tmp_dir.path(),
                 &flair_path,
                 &release_manifest,

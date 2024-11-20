@@ -1,25 +1,38 @@
 use std::{env, fs, path::PathBuf};
 
 use anyhow::Result;
-use clap::{arg, Parser};
+use clap::{Parser, ValueEnum};
 use log::*;
 
-use signature_generator::{self as sig_gen};
+use signature_generator::{crate_sigs, ida, std_sigs};
 
 #[derive(Parser, Debug)]
 #[command(version, about)]
 struct Args {
     /// Path to the FLIRT directory. Needed to get access to `sigmake` and co. If not set signature
     /// generation for IDA will be skipped.
-    #[arg(short, long)]
+    #[arg(short, long, env = "IDA_FLAIR_PATH")]
     flair_path: Option<PathBuf>,
-    /// Path of binary to generate signatures for
-    bin_path: PathBuf,
-    /// Output directory
-    out_path: Option<PathBuf>,
-    /// Keep extracted files (for debugging purposes)
+    /// Keep extracted std files; for debugging `std` mode
     #[arg(short, long)]
     keep_extracted_files: bool,
+    /// Only compile specific dependency crate and keep working directory; for debugging `crate`
+    /// mode compilation failures
+    #[arg(short, long)]
+    debug_crate: Option<String>,
+    #[arg(short, long)]
+    /// Output directory for signature files
+    out_path: Option<PathBuf>,
+    /// TODO
+    mode: GenerateSignatureMode,
+    /// Path of binary to generate signatures for
+    bin_path: PathBuf,
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+enum GenerateSignatureMode {
+    Std,
+    Crates,
 }
 
 #[tokio::main]
@@ -35,29 +48,54 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
+    let out_path = args.out_path.map(Ok).unwrap_or_else(env::current_dir)?;
 
     let bin = fs::read(args.bin_path)?;
-    let (release_manifest, target) = sig_gen::detect_rustc_release(&bin).await?;
+    let (release_manifest, target) = std_sigs::detect_rustc_release(&bin).await?;
 
-    let std_lib = sig_gen::download_std_lib(&release_manifest, target).await?;
-    let tmp_dir = sig_gen::extract_object_files_to_tmp_dir(&std_lib, &release_manifest)?;
+    match args.mode {
+        GenerateSignatureMode::Std => {
+            let std_lib = std_sigs::download_std_lib(&release_manifest, target).await?;
+            let tmp_dir = std_sigs::extract_object_files_to_tmp_dir(&std_lib, &release_manifest)?;
 
-    let tmp_path = if args.keep_extracted_files {
-        let p = tmp_dir.into_path();
-        info!("Keeping extracted files at {}", p.display());
-        p
-    } else {
-        tmp_dir.path().to_owned()
-    };
+            let tmp_path = if args.keep_extracted_files {
+                let p = tmp_dir.into_path();
+                info!("Keeping extracted std files at {}", p.display());
+                p
+            } else {
+                tmp_dir.path().to_owned()
+            };
 
-    if let Some(flair_path) = args.flair_path {
-        sig_gen::ida::generate_signatures_for_std(
-            &tmp_path,
-            &flair_path,
-            &release_manifest,
-            &target,
-            args.out_path.map(Ok).unwrap_or_else(env::current_dir)?,
-        )?;
+            if let Some(flair_path) = args.flair_path {
+                ida::generate_signatures_for_std(
+                    &tmp_path,
+                    &flair_path,
+                    &release_manifest,
+                    &target,
+                    out_path,
+                )?;
+            } else {
+                warn!("--flair-path not set; not creating signatures...")
+            }
+        }
+        GenerateSignatureMode::Crates => {
+            crate_sigs::prepare_toolchain(release_manifest.release(), &target)?;
+
+            let detected_crates = crate_sigs::detect_used_crates(&bin)?;
+            if let Some(flair_path) = args.flair_path {
+                crate_sigs::generate_signatures_for_crates(
+                    detected_crates,
+                    release_manifest.release(),
+                    &target,
+                    args.debug_crate.as_deref(),
+                    &out_path,
+                    &flair_path,
+                )
+                .await?;
+            } else {
+                warn!("--flair-path not set; not creating signatures...")
+            }
+        }
     }
 
     Ok(())

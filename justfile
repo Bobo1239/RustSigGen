@@ -1,3 +1,4 @@
+# Load environment variables from .env; Currently only useful for loading IDA_FLAIR_PATH
 set dotenv-load
 
 ida_build_path := "target/ida-plugin"
@@ -28,4 +29,4 @@ install-binja-plugin: binja-plugin
     -ln -s -T -r target/binja-plugin ~/.binaryninja/plugins/binja-rust-plugin
 
 run *args:
-    mold -run cargo run -- -f $IDA_FLAIR_PATH {{args}}
+    mold -run cargo run -- {{args}}

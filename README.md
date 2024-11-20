@@ -1,6 +1,11 @@
 # Rust Signature Generator
 TODO: Better name
 
+## Runtime dependencies
+- `git`
+- [`rustup`](https://rustup.rs/)
+- [`cargo-xwin`](https://github.com/rust-cross/cargo-xwin)
+
 ## Install instructions
 
 ### IDA Pro
