@@ -6,14 +6,18 @@ TODO: Better name
 - [`rustup`](https://rustup.rs/)
 - [`cargo-xwin`](https://github.com/rust-cross/cargo-xwin)
 
+> We depend on an unreleased [PR](https://github.com/rust-cross/cargo-xwin/pull/123) for
+> `cargo-xwin` so currently a git installation is required: `cargo install --locked --git
+> https://github.com/rust-cross/cargo-xwin.git cargo-xwin`
+
 ## Install instructions
 
 ### IDA Pro
 ```bash
 > just install-ida-plugin
-# Make sure to adjust `~/.idapro/plugins/ida-rust-plugin.cfg`!
+# Make sure to adjust `~/.idapro/plugins/ida-rust-plugin/ida-rust-plugin.cfg`!
 ```
-You should now see the `rust:*` actions in your IDA Pro command palette.
+You can now generate std signatures in IDA via Edit > Plugins > Rust Signature Generator.
 
 ### Binary Ninja
 The official "Signature Kit Plugin" must be installed as a prerequisite which can be done using the
