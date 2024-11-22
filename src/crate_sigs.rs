@@ -31,7 +31,7 @@ use tar::Archive;
 use tempfile::TempDir;
 use toml::Table;
 
-use crate::{caching_http, ida, Release, Target};
+use crate::{caching_http, ida, CompilerOptions, Profile, Release, Target};
 
 // NOTE:
 // - In general crates.io doesn't remove any code even when a version is yanked so generally this should work.
@@ -514,6 +514,7 @@ pub async fn generate_signatures_for_crates(
     debug_crate_compilation: Option<&str>,
     out_path: &Path,
     ida_flair_path: &Path,
+    compiler_options: &CompilerOptions,
 ) -> Result<()> {
     let last_cargo_update_date = determine_last_cargo_update_date(&crates).await?;
     let old_registry_index = last_cargo_update_date
@@ -697,6 +698,7 @@ pub async fn generate_signatures_for_crates(
                     &old_registry_index,
                     out_path,
                     ida_flair_path,
+                    compiler_options,
                 ) {
                     failed_crates.push(cratee);
                     error!(
@@ -759,6 +761,7 @@ async fn get_crates_io_version(
     Ok(ret)
 }
 
+#[allow(clippy::too_many_arguments)] // FIXME
 fn compile_crate_and_generate_signatures(
     cratee: &DetectedCrate,
     crate_dir: &Path,
@@ -767,6 +770,7 @@ fn compile_crate_and_generate_signatures(
     old_registry_index: &Option<PathBuf>,
     out_path: &Path,
     ida_flair_path: &Path,
+    compiler_options: &CompilerOptions,
 ) -> Result<()> {
     // Setup a Cargo "source replacement" to use the the crate registry index at an old state. This
     // is our best-effort attempt at replicating the Cargo.lock of the actual binary.
@@ -810,40 +814,73 @@ fn compile_crate_and_generate_signatures(
             .arg("update"),
     )?;
 
-    exec_cmd(
-        Command::new("cargo")
-            .current_dir(crate_dir)
-            // Set lint cap level to the lowest possible value which effectively disables all
-            // warnings We need this since some projects run with `#[deny(warnings)]` which may
-            // cause our build to fail.
-            // Reference: https://doc.rust-lang.org/rustc/lints/levels.html#capping-lints
-            // NOTE: Enabling `--cap-lints allow` causes the following error to be thrown when compiling for musl:
-            //       `error: output of --print=file-names missing when learning about target-specific information from rustc`
-            // TODO: Can't use this for all targets due to https://github.com/rust-lang/cargo/issues/8010
-            //       Fortunately this isn't a must-have anymore since we can time-travel for the
-            //       registry index.
-            // .env("RUSTFLAGS", "--cap-lints allow")
-            // .env("CARGO_PROFILE_RELEASE_OPT_LEVEL", "z")
-            // .env("CARGO_PROFILE_RELEASE_LTO", "true")
-            // .env("CARGO_PROFILE_RELEASE_CODEGENf_UNITS", "1")
-            .env("CARGO_TARGET_DIR", "./target") // Override target dir so we don't need to pay attention to workspaces
-            .env("RUSTFLAGS", "--emit=obj") // TODO: Docs
-            .env("XWIN_ARCH", "x86,x86_64")
-            // NOTE: This requires https://github.com/rust-cross/cargo-xwin/pull/123 which is not in a release atm
-            .env("XWIN_INCLUDE_DEBUG_SYMBOLS", "true")
-            .arg(format!("+{}", rust_release.name()))
-            .arg("xwin")
-            .arg("build")
-            .arg("--release") // TODO
-            .arg("--all-targets") // TODO: Fall back to individual targets/target-types if all at once fails
-            .arg("--target")
-            .arg(target.name())
-            .arg("--features")
-            .arg(cratee.features.join(",")), // TODO: Currently this may still miss features activated by other features which are enabled in the final dependency graph; Need to query guppy for activated features (ideally for the specific target platform)
-    )?;
+    let mut cmd = Command::new("cargo");
 
-    // TODO: debug/release
-    let target_dir = crate_dir.join("target").join(target.name()).join("release");
+    cmd.current_dir(crate_dir)
+        // Set lint cap level to the lowest possible value which effectively disables all
+        // warnings. We need this since some projects run with `#[deny(warnings)]` which may
+        // cause our build to fail.
+        // Reference: https://doc.rust-lang.org/rustc/lints/levels.html#capping-lints
+        // NOTE: Enabling `--cap-lints allow` causes the following error to be thrown when
+        //       compiling for musl:
+        //       `error: output of --print=file-names missing when learning about target-specific information from rustc`
+        // NOTE: Can't use this for all targets due to
+        //       https://github.com/rust-lang/cargo/issues/8010. Fortunately this isn't a
+        //       must-have anymore since we can time-travel for the registry index.
+        // .env("RUSTFLAGS", "--cap-lints allow")
+        .env("CARGO_TARGET_DIR", "./target") // Override target dir so we don't need to pay attention to workspaces
+        .env("RUSTFLAGS", "--emit=obj") // TODO: Docs
+        .env("XWIN_ARCH", "x86,x86_64")
+        // This is sometimes required for successful compilation. Dunno why exactly...
+        // (https://github.com/rust-cross/cargo-xwin/pull/123)
+        // TODO: The PR is not yet in a published release of cargo-xwin.
+        .env("XWIN_INCLUDE_DEBUG_SYMBOLS", "true")
+        .arg(format!("+{}", rust_release.name()))
+        .arg("xwin")
+        .arg("build")
+        .arg("--profile")
+        .arg(compiler_options.profile.name())
+        .arg("--all-targets") // TODO: Fall back to individual targets/target-types if all at once fails
+        .arg("--target")
+        .arg(target.name())
+        .arg("--features")
+        // TODO: Currently this may still miss features activated by other features which are enabled in the final dependency graph; Need to query guppy for activated features (ideally for the specific target platform)
+        .arg(cratee.features.join(","));
+
+    // Apply user-selected compiler options via environment variables
+    let env_var_prefix = match compiler_options.profile {
+        Profile::Dev => "CARGO_PROFILE_DEV_",
+        Profile::Release => "CARGO_PROFILE_RELEASE_",
+    };
+    let options = [
+        (
+            "CODEGEN_UNITS",
+            compiler_options.codegen_units.map(|o| o.to_string()),
+        ),
+        (
+            "LTO",
+            compiler_options.lto.as_ref().map(|o| o.value().to_owned()),
+        ),
+        (
+            "OPT_LEVEL",
+            compiler_options
+                .opt_level
+                .as_ref()
+                .map(|o| o.value().to_owned()),
+        ),
+    ];
+    for (opt, opt_val) in options {
+        if let Some(val) = opt_val {
+            cmd.env(format!("{env_var_prefix}{opt}"), val);
+        }
+    }
+
+    exec_cmd(&mut cmd)?;
+
+    let target_dir = crate_dir
+        .join("target")
+        .join(target.name())
+        .join(compiler_options.profile.target_subdir());
 
     let mut input_globs = Vec::new();
     if fs::read_dir(&target_dir)?

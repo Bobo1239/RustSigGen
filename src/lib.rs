@@ -7,6 +7,7 @@ pub mod std_sigs;
 use std::path::PathBuf;
 
 use chrono::NaiveDate;
+use clap::{Args, ValueEnum};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use toml::Table;
@@ -102,6 +103,95 @@ impl Target {
             Target::X8664WindowsGnu => "x86_64-pc-windows-gnu",
             Target::I686WindowsMsvc => "i686-pc-windows-msvc",
             Target::I686WindowsGnu => "i686-pc-windows-gnu",
+        }
+    }
+}
+
+// NOTE: This is also used for the CLI argument parsing
+#[derive(Debug, Clone, Args)]
+pub struct CompilerOptions {
+    /// Crate compilation: Compilation profile
+    #[arg(long, default_value = "release")]
+    profile: Profile,
+    /// Crate compilation: Codegen units
+    #[arg(long)]
+    codegen_units: Option<usize>,
+    /// Crate compilation: LTO
+    #[arg(long)]
+    lto: Option<Lto>,
+    /// Crate compilation: optimization level
+    #[arg(long)]
+    opt_level: Option<OptLevel>,
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum Profile {
+    Dev,
+    Release,
+}
+
+impl Profile {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Profile::Dev => "dev",
+            Profile::Release => "release",
+        }
+    }
+
+    /// The subdirectory in `target/<triple>/` which corresponds to profile. This is different from
+    /// the profile name for history reasons.[^1]
+    /// [^1]: <https://doc.rust-lang.org/cargo/guide/build-cache.html#build-cache>
+    pub fn target_subdir(&self) -> &'static str {
+        match self {
+            Profile::Dev => "debug",
+            Profile::Release => "release",
+        }
+    }
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum OptLevel {
+    #[value(name = "0")]
+    L0,
+    #[value(name = "1")]
+    L1,
+    #[value(name = "2")]
+    L2,
+    #[value(name = "3")]
+    L3,
+    S,
+    Z,
+}
+
+impl OptLevel {
+    fn value(&self) -> &'static str {
+        match self {
+            OptLevel::L0 => "0",
+            OptLevel::L1 => "1",
+            OptLevel::L2 => "2",
+            OptLevel::L3 => "3",
+            OptLevel::S => "s",
+            OptLevel::Z => "z",
+        }
+    }
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum Lto {
+    /// `lto = "thin"` (quivalent to `lto = false`)
+    Thin,
+    /// `lto = "fat"` (quivalent to `lto = true`)
+    Fat,
+    /// `lto = "off"`
+    Off,
+}
+
+impl Lto {
+    fn value(&self) -> &'static str {
+        match self {
+            Lto::Thin => "thin",
+            Lto::Fat => "fat",
+            Lto::Off => "off",
         }
     }
 }

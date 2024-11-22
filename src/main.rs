@@ -4,7 +4,7 @@ use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use log::*;
 
-use signature_generator::{crate_sigs, ida, std_sigs};
+use signature_generator::{crate_sigs, ida, std_sigs, CompilerOptions};
 
 #[derive(Parser, Debug)]
 #[command(version, about)]
@@ -23,6 +23,10 @@ struct Args {
     #[arg(short, long)]
     /// Output directory for signature files
     out_path: Option<PathBuf>,
+
+    #[command(flatten)]
+    compiler_options: CompilerOptions,
+
     /// TODO
     mode: GenerateSignatureMode,
     /// Path of binary to generate signatures for
@@ -90,6 +94,7 @@ async fn main() -> Result<()> {
                     args.debug_crate.as_deref(),
                     &out_path,
                     &flair_path,
+                    &args.compiler_options,
                 )
                 .await?;
             } else {
