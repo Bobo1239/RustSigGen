@@ -62,6 +62,14 @@ static CRATES_IO_USER_AGENT: &str = concat!(
 // Dummy crate name used during dependecy graph creation/expansion
 const DUMMY_CRATE_NAME: &str = "signature_generator_dummy_package";
 
+pub struct Context<'a> {
+    pub rust_release: &'a Release,
+    pub target: &'a Target,
+    pub out_path: &'a Path,
+    pub ida_flair_path: &'a Path,
+    pub compiler_options: &'a CompilerOptions,
+}
+
 // Our assumption is that the upload date of the last detected crate version is the date when `cargo
 // update` was performed last.
 async fn determine_last_cargo_update_date(
@@ -299,9 +307,8 @@ fn generate_cargo_toml_content(crates: &HashSet<DetectedCrate>) -> String {
 }
 
 fn determine_transitive_dependencies_and_max_features_inner(
+    ctx: &Context,
     cwd: &Path,
-    rust_release: &Release,
-    target: &Target,
     crates: HashSet<DetectedCrate>,
 ) -> Result<HashSet<DetectedCrate>> {
     let cargo_toml_path = cwd.join("Cargo.toml");
@@ -322,10 +329,10 @@ fn determine_transitive_dependencies_and_max_features_inner(
         // https://github.com/rust-lang/cargo/issues/11014
         .env("CARGO_NET_GIT_FETCH_WITH_CLI", "true")
         .current_dir(cwd)
-        .arg(format!("+{}", rust_release.name()))
+        .arg(format!("+{}", ctx.rust_release.name()))
         .arg("check")
         .arg("--target")
-        .arg(target.name())
+        .arg(ctx.target.name())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .output()?;
@@ -372,7 +379,7 @@ fn determine_transitive_dependencies_and_max_features_inner(
                 || feature.starts_with("__") // Internal features
                 || feature == "no_std" // Intended for no_std (this pattern is actually discouraged by Cargo since it isn't additive)
                 || feature == "unstable" // Often require nightly
-                    || (!rust_release.is_nightly() && feature.contains("nightly"))
+                    || (!ctx.rust_release.is_nightly() && feature.contains("nightly"))
                 // These presumably don't compile on a stable toolchains
             }
         }
@@ -380,7 +387,7 @@ fn determine_transitive_dependencies_and_max_features_inner(
 
     let mut cargo_opts = CargoOptions::new();
     cargo_opts.set_target_platform(PlatformSpec::from(Platform::from_triple(
-        Triple::new(target.name())?,
+        Triple::new(ctx.target.name())?,
         TargetFeatures::Unknown,
     )));
 
@@ -435,22 +442,17 @@ fn determine_transitive_dependencies_and_max_features_inner(
         info!("Trying to compile extended dependency graph");
         let output = Command::new("cargo")
             .current_dir(cwd)
-            .arg(format!("+{}", rust_release.name()))
+            .arg(format!("+{}", ctx.rust_release.name()))
             .arg("check")
             .arg("--target")
-            .arg(target.name())
+            .arg(ctx.target.name())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .output()?;
         if output.status.success() {
             info!("Successfully extended dependency graph");
             // Try extending again
-            determine_transitive_dependencies_and_max_features_inner(
-                cwd,
-                rust_release,
-                target,
-                new_crates,
-            )
+            determine_transitive_dependencies_and_max_features_inner(ctx, cwd, new_crates)
         } else {
             warn!("Failed to extend dependency graph");
             // println!("{}", cargo_toml_path.display());
@@ -463,8 +465,7 @@ fn determine_transitive_dependencies_and_max_features_inner(
 }
 
 fn determine_transitive_dependencies_and_max_features(
-    rust_release: &Release,
-    target: &Target,
+    ctx: &Context,
     old_registry_index: &Option<PathBuf>,
     crates: HashSet<DetectedCrate>,
 ) -> Result<HashSet<DetectedCrate>> {
@@ -499,22 +500,13 @@ fn determine_transitive_dependencies_and_max_features(
         fs::write(&cargo_config, cargo_config_content)?;
     }
 
-    determine_transitive_dependencies_and_max_features_inner(
-        tmpdir.path(),
-        rust_release,
-        target,
-        crates,
-    )
+    determine_transitive_dependencies_and_max_features_inner(ctx, tmpdir.path(), crates)
 }
 
 pub async fn generate_signatures_for_crates(
+    ctx: &Context<'_>,
     crates: HashSet<DetectedCrate>,
-    rust_release: &Release,
-    target: &Target,
     debug_crate_compilation: Option<&str>,
-    out_path: &Path,
-    ida_flair_path: &Path,
-    compiler_options: &CompilerOptions,
 ) -> Result<()> {
     let last_cargo_update_date = determine_last_cargo_update_date(&crates).await?;
     let old_registry_index = last_cargo_update_date
@@ -527,12 +519,8 @@ pub async fn generate_signatures_for_crates(
         })
         .transpose()?;
 
-    let crates = determine_transitive_dependencies_and_max_features(
-        rust_release,
-        target,
-        &old_registry_index,
-        crates,
-    )?;
+    let crates =
+        determine_transitive_dependencies_and_max_features(ctx, &old_registry_index, crates)?;
     info!("Crates planned for signature generation:");
     for c in &crates {
         info!("  - {} {} (features: {:?})", c.name, c.version, c.features);
@@ -545,6 +533,7 @@ pub async fn generate_signatures_for_crates(
     };
 
     let mut failed_crates = Vec::new();
+    let mut skipped_benches_crates = Vec::new();
     for cratee in crates {
         if let Some(c) = debug_crate_compilation {
             if cratee.name != c {
@@ -690,16 +679,26 @@ pub async fn generate_signatures_for_crates(
                     }
                 }
 
-                if let Err(e) = compile_crate_and_generate_signatures(
-                    &cratee,
-                    &crate_dir,
-                    rust_release,
-                    target,
-                    &old_registry_index,
-                    out_path,
-                    ida_flair_path,
-                    compiler_options,
-                ) {
+                let gen_sigs = |skip_benches: bool| {
+                    compile_crate_and_generate_signatures(
+                        ctx,
+                        &cratee,
+                        &crate_dir,
+                        &old_registry_index,
+                        skip_benches,
+                    )
+                };
+
+                // Benches are a very common compilation error source since they often depend on
+                // nightly features and are handled somewhat special by cargo. (one example: resvg
+                // fails to compile with `cargo build --all-targets` since the bencher dependency
+                // somehow doesn't get included by cargo)
+                // So to sidestep that first try without skipping benches. If that fails skip them.
+                let mut skipped_benches = false;
+                if let Err(e) = gen_sigs(false).or_else(|_| {
+                    skipped_benches = true;
+                    gen_sigs(true)
+                }) {
                     failed_crates.push(cratee);
                     error!(
                         "Failed to generate signatures for {} {}: {}\n{}",
@@ -708,6 +707,8 @@ pub async fn generate_signatures_for_crates(
                         e,
                         e.backtrace()
                     );
+                } else if skipped_benches {
+                    skipped_benches_crates.push(cratee);
                 }
 
                 if debug_crate_compilation.is_some() {
@@ -732,6 +733,14 @@ pub async fn generate_signatures_for_crates(
             error!("- {} {}", failed.name, failed.version);
         }
         error!("Check the log for further details.");
+    }
+
+    if !skipped_benches_crates.is_empty() {
+        warn!("Benches compilation failed for:");
+        for skipped in skipped_benches_crates {
+            warn!("- {} {}", skipped.name, skipped.version);
+        }
+        warn!("Check the log for further details.");
     }
 
     Ok(())
@@ -761,16 +770,12 @@ async fn get_crates_io_version(
     Ok(ret)
 }
 
-#[allow(clippy::too_many_arguments)] // FIXME
 fn compile_crate_and_generate_signatures(
+    ctx: &Context,
     cratee: &DetectedCrate,
     crate_dir: &Path,
-    rust_release: &Release,
-    target: &Target,
     old_registry_index: &Option<PathBuf>,
-    out_path: &Path,
-    ida_flair_path: &Path,
-    compiler_options: &CompilerOptions,
+    skip_benches: bool,
 ) -> Result<()> {
     // Setup a Cargo "source replacement" to use the the crate registry index at an old state. This
     // is our best-effort attempt at replicating the Cargo.lock of the actual binary.
@@ -789,18 +794,21 @@ fn compile_crate_and_generate_signatures(
         };
 
         let mut cargo_config_content = fs::read_to_string(&cargo_config).unwrap_or(String::new());
-        cargo_config_content.push_str(&formatdoc!(
-            r#"
-            [source.crates-io]
-            replace-with = "crates-io-from-the-past"
+        // Our source replacement may already exist from a previous try
+        if !cargo_config_content.contains("crates-io-from-the-past") {
+            cargo_config_content.push_str(&formatdoc!(
+                r#"
+                [source.crates-io]
+                replace-with = "crates-io-from-the-past"
 
-            [source.crates-io-from-the-past]
-            registry = "file://{}"
-            "#,
-            old_registry_index.display()
-        ));
-        fs::create_dir_all(cargo_config.parent().unwrap())?;
-        fs::write(&cargo_config, cargo_config_content)?;
+                [source.crates-io-from-the-past]
+                registry = "file://{}"
+                "#,
+                old_registry_index.display()
+            ));
+            fs::create_dir_all(cargo_config.parent().unwrap())?;
+            fs::write(&cargo_config, cargo_config_content)?;
+        }
     }
 
     // NOTE: This will copy our old registry index to the cargo cache directory...
@@ -810,7 +818,7 @@ fn compile_crate_and_generate_signatures(
             // Use the git CLI instead of libgit2 which has performance problems:
             // https://github.com/rust-lang/cargo/issues/11014
             .env("CARGO_NET_GIT_FETCH_WITH_CLI", "true")
-            .arg(format!("+{}", rust_release.name()))
+            .arg(format!("+{}", ctx.rust_release.name()))
             .arg("update"),
     )?;
 
@@ -835,35 +843,46 @@ fn compile_crate_and_generate_signatures(
         // (https://github.com/rust-cross/cargo-xwin/pull/123)
         // TODO: The PR is not yet in a published release of cargo-xwin.
         .env("XWIN_INCLUDE_DEBUG_SYMBOLS", "true")
-        .arg(format!("+{}", rust_release.name()))
+        .arg(format!("+{}", ctx.rust_release.name()))
         .arg("xwin")
         .arg("build")
         .arg("--profile")
-        .arg(compiler_options.profile.name())
-        .arg("--all-targets") // TODO: Fall back to individual targets/target-types if all at once fails
+        .arg(ctx.compiler_options.profile.name())
         .arg("--target")
-        .arg(target.name())
+        .arg(ctx.target.name())
         .arg("--features")
         // TODO: Currently this may still miss features activated by other features which are enabled in the final dependency graph; Need to query guppy for activated features (ideally for the specific target platform)
         .arg(cratee.features.join(","));
 
+    if skip_benches {
+        cmd.arg("--lib")
+            .arg("--bins")
+            .arg("--tests")
+            .arg("--examples");
+    } else {
+        cmd.arg("--all-targets");
+    }
+
     // Apply user-selected compiler options via environment variables
-    let env_var_prefix = match compiler_options.profile {
+    let env_var_prefix = match ctx.compiler_options.profile {
         Profile::Dev => "CARGO_PROFILE_DEV_",
         Profile::Release => "CARGO_PROFILE_RELEASE_",
     };
     let options = [
         (
             "CODEGEN_UNITS",
-            compiler_options.codegen_units.map(|o| o.to_string()),
+            ctx.compiler_options.codegen_units.map(|o| o.to_string()),
         ),
         (
             "LTO",
-            compiler_options.lto.as_ref().map(|o| o.value().to_owned()),
+            ctx.compiler_options
+                .lto
+                .as_ref()
+                .map(|o| o.value().to_owned()),
         ),
         (
             "OPT_LEVEL",
-            compiler_options
+            ctx.compiler_options
                 .opt_level
                 .as_ref()
                 .map(|o| o.value().to_owned()),
@@ -879,8 +898,8 @@ fn compile_crate_and_generate_signatures(
 
     let target_dir = crate_dir
         .join("target")
-        .join(target.name())
-        .join(compiler_options.profile.target_subdir());
+        .join(ctx.target.name())
+        .join(ctx.compiler_options.profile.target_subdir());
 
     let mut input_globs = Vec::new();
     if fs::read_dir(&target_dir)?
@@ -896,13 +915,13 @@ fn compile_crate_and_generate_signatures(
 
     let sig_name = format!("{}-{}", cratee.name, cratee.version);
     let sig_file_name = format!("{}.sig", sig_name);
-    std::fs::create_dir_all(out_path)?;
-    let sig_out_path = out_path.join(sig_file_name);
+    std::fs::create_dir_all(ctx.out_path)?;
+    let sig_out_path = ctx.out_path.join(sig_file_name);
     ida::generate_signatures(
-        ida_flair_path,
+        ctx.ida_flair_path,
         &target_dir,
         &input_globs,
-        target,
+        ctx.target,
         &sig_name,
         &sig_out_path,
     )?;
@@ -920,20 +939,20 @@ fn exec_cmd(cmd: &mut Command) -> Result<()> {
     Ok(())
 }
 
-pub fn prepare_toolchain(rust_release: &Release, target: &Target) -> Result<()> {
+pub fn prepare_toolchain(ctx: &Context) -> Result<()> {
     exec_cmd(Command::new("rustup").args([
         "toolchain",
         "install",
         "--profile",
         "minimal",
-        &rust_release.name(),
+        &ctx.rust_release.name(),
     ]))?;
     exec_cmd(Command::new("rustup").args([
         "target",
         "add",
         "--toolchain",
-        &rust_release.name(),
-        target.name(),
+        &ctx.rust_release.name(),
+        ctx.target.name(),
     ]))?;
     Ok(())
 }

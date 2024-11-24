@@ -4,7 +4,10 @@ use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use log::*;
 
-use signature_generator::{crate_sigs, ida, std_sigs, CompilerOptions};
+use signature_generator::{
+    crate_sigs::{self, Context},
+    ida, std_sigs, CompilerOptions,
+};
 
 #[derive(Parser, Debug)]
 #[command(version, about)]
@@ -83,18 +86,21 @@ async fn main() -> Result<()> {
             }
         }
         GenerateSignatureMode::Crates => {
-            crate_sigs::prepare_toolchain(release_manifest.release(), &target)?;
-
             let detected_crates = crate_sigs::detect_used_crates(&bin)?;
             if let Some(flair_path) = args.flair_path {
+                let ctx = Context {
+                    rust_release: release_manifest.release(),
+                    target: &target,
+                    out_path: &out_path,
+                    ida_flair_path: &flair_path,
+                    compiler_options: &args.compiler_options,
+                };
+
+                crate_sigs::prepare_toolchain(&ctx)?;
                 crate_sigs::generate_signatures_for_crates(
+                    &ctx,
                     detected_crates,
-                    release_manifest.release(),
-                    &target,
                     args.debug_crate.as_deref(),
-                    &out_path,
-                    &flair_path,
-                    &args.compiler_options,
                 )
                 .await?;
             } else {
