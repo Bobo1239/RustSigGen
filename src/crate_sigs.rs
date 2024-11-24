@@ -902,15 +902,13 @@ fn compile_crate_and_generate_signatures(
         .join(ctx.compiler_options.profile.target_subdir());
 
     let mut input_globs = Vec::new();
-    if fs::read_dir(&target_dir)?
-        .any(|f| f.unwrap().file_name().as_encoded_bytes().ends_with(b".o"))
-    {
-        input_globs.push(target_dir.to_str().unwrap().to_owned() + "/*.o");
-    }
-    if fs::read_dir(target_dir.join("deps"))?
-        .any(|f| f.unwrap().file_name().as_encoded_bytes().ends_with(b".o"))
-    {
-        input_globs.push(target_dir.to_str().unwrap().to_owned() + "/deps/*.o");
+    for subdir in ["", "deps", "examples"] {
+        // Subdirs reference: https://doc.rust-lang.org/cargo/guide/build-cache.html
+        let dir = &target_dir.join(subdir);
+        // We have to check this explicitly here since `pelf` fails if the glob matches nothing
+        if fs::read_dir(dir)?.any(|f| f.unwrap().file_name().as_encoded_bytes().ends_with(b".o")) {
+            input_globs.push(dir.to_str().unwrap().to_owned() + "/*.o");
+        }
     }
 
     let sig_name = format!("{}-{}", cratee.name, cratee.version);
