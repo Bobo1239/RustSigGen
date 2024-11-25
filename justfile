@@ -4,6 +4,11 @@ set dotenv-load
 ida_build_path := "target/ida-plugin"
 ida_install_path := "~/.idapro/plugins/ida-rust-plugin"
 
+run *args:
+    mold -run cargo build
+    # Don't use mold when generating our crate signatures (probably doesn't matter)
+    cargo run -- {{args}}
+
 ida-plugin:
     cargo build --release -p ida-rust-plugin
     mkdir -p {{ida_build_path}}
@@ -27,6 +32,3 @@ binja-plugin:
 
 install-binja-plugin: binja-plugin
     -ln -s -T -r target/binja-plugin ~/.binaryninja/plugins/binja-rust-plugin
-
-run *args:
-    mold -run cargo run -- {{args}}
