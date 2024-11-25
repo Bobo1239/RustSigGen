@@ -887,6 +887,8 @@ fn compile_crate_and_generate_signatures(
                 .as_ref()
                 .map(|o| o.value().to_owned()),
         ),
+        // Explicitly disable symbol stripping; Although this probably isn't set anyways...
+        ("STRIP", Some("none".to_owned())),
     ];
     for (opt, opt_val) in options {
         if let Some(val) = opt_val {
