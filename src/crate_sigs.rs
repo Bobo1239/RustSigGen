@@ -906,10 +906,17 @@ fn compile_crate_and_generate_signatures(
         .arg(format!("+{}", ctx.rust_release.name()))
         .arg("xwin")
         .arg("build")
-        .arg("--profile")
-        .arg(ctx.compiler_options.profile.name())
         .arg("--target")
         .arg(ctx.target.name());
+
+    // NOTE: Can't use `--profile <dev,release>` since that was only introduced in Cargo 1.57
+    //       (2021-12-02).
+    match ctx.compiler_options.profile {
+        Profile::Dev => {} // This is already the default profile
+        Profile::Release => {
+            cmd.arg("--release");
+        }
+    }
 
     if !use_default_features {
         match &cratee.features {
@@ -930,6 +937,7 @@ fn compile_crate_and_generate_signatures(
     }
 
     // Apply user-selected compiler options via environment variables
+    // NOTE: This is supported since Cargo 1.43 (2020-04-23)
     let env_var_prefix = match ctx.compiler_options.profile {
         Profile::Dev => "CARGO_PROFILE_DEV_",
         Profile::Release => "CARGO_PROFILE_RELEASE_",
