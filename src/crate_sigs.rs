@@ -283,16 +283,21 @@ fn generate_cargo_toml_content(crates: &HashSet<DetectedCrate>) -> String {
                     continue;
                 }
 
+                // NOTE: Strictly speaking we need `default-features = false` here...
                 ret += &format!(
                     r#"crate{} = {{ package = "{}", version = "={}", features = [{}] }}"#,
                     counter,
                     c.name,
                     ver,
-                    if c.features.is_empty() {
-                        "".to_owned()
-                    } else {
-                        format!("\"{}\"", c.features.join("\",\""))
-                    },
+                    match &c.features {
+                        None => "".to_owned(),
+                        Some(feats) =>
+                            if feats.is_empty() {
+                                "".to_owned()
+                            } else {
+                                format!("\"{}\"", feats.join("\",\""))
+                            },
+                    }
                 );
                 counter += 1;
                 ret += "\n";
@@ -310,36 +315,60 @@ fn determine_transitive_dependencies_and_max_features_inner(
     ctx: &Context,
     cwd: &Path,
     crates: HashSet<DetectedCrate>,
-) -> Result<HashSet<DetectedCrate>> {
+) -> Result<(HashSet<DetectedCrate>, bool)> {
     let cargo_toml_path = cwd.join("Cargo.toml");
 
-    // NOTE: This is currently a hack which enables crate source code to use nightly features even
-    //       when the compiler isn't actually a nightly release. This is required for these reasons:
-    //       - We accidentally enable create features which are only intended for nightly compilers
-    //       - Some projects use nightly features for development targets (e.g. benches)
-    //       Using this env var is actually strongly discouraged by the compiler developers since it
-    //       breaks the stability guarantees of Rust but for what we're doing all hope is lost
-    //       anyways...
-    std::env::set_var("RUSTC_BOOTSTRAP", "1");
-
-    fs::write(&cargo_toml_path, generate_cargo_toml_content(&crates))?;
     info!("Checking if crates can be compiled (may take a long time on first run)");
-    let output = Command::new("cargo")
+    let cargo_toml_content = generate_cargo_toml_content(&crates);
+    fs::write(&cargo_toml_path, &cargo_toml_content)?;
+    debug!("{}", &cargo_toml_content);
+
+    // for v in std::env::vars() {
+    //     println!("{:?}", v);
+    // }
+
+    let mut cmd = Command::new("cargo");
+    // FIXME: Deduplicate common flags/envs
+    cmd
+        // When running the signature generator using `cargo run`/`just run` the `CARGO` env var
+        // will be set and somehow that can propagate to the inner invocation which then fails with
+        // weird errors like: "error: the `-Z unstable-options` flag must also be passed to enable
+        // the flag `check-cfg`"
+        .env_remove("CARGO")
+        // NOTE: This is currently a hack which enables crate source code to use nightly features
+        //       even when the compiler isn't actually a nightly release. This is required for these
+        //       reasons:
+        //       - We accidentally enable create features which are only intended for nightly
+        //         compilers
+        //       - Some projects use nightly features for development targets (e.g. benches)
+        //       Using this env var is actually strongly discouraged by the compiler developers
+        //       since it breaks the stability guarantees of Rust but for what we're doing all hope
+        //       is lost anyways...
+        .env("RUSTC_BOOTSTRAP", "1")
         // Use the git CLI instead of libgit2 which has performance problems:
         // https://github.com/rust-lang/cargo/issues/11014
         .env("CARGO_NET_GIT_FETCH_WITH_CLI", "true")
+        .env("XWIN_ARCH", "x86,x86_64")
+        // This is sometimes required for successful compilation. Dunno why exactly...
+        // (https://github.com/rust-cross/cargo-xwin/pull/123)
+        // TODO: The PR is not yet in a published release of cargo-xwin.
+        .env("XWIN_INCLUDE_DEBUG_SYMBOLS", "true")
         .current_dir(cwd)
         .arg(format!("+{}", ctx.rust_release.name()))
+        // We need although we're only doing a check run (no code generation) due to build scripts.
+        // Specifically we need this to successfully cross-compile `ring` for msvc targets.
+        .arg("xwin")
         .arg("check")
         .arg("--target")
         .arg(ctx.target.name())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .output()?;
+        .stderr(Stdio::inherit());
+    let output = cmd.output()?;
     ensure!(
         output.status.success(),
-        "cargo check failed: {}",
-        String::from_utf8_lossy(&output.stderr)
+        "cargo check failed:\n{}\n{:?}",
+        String::from_utf8_lossy(&output.stderr),
+        cmd
     );
 
     // TODO: This is still fraught with peril... consider e.g. flate2 (different selectable backends)
@@ -364,7 +393,17 @@ fn determine_transitive_dependencies_and_max_features_inner(
             ("parking_lot", "deadlock_detection" | "send_guard") => true, // Incompatible features; and most likely not enabled anyway
             ("futures-util", "bilock") => true, // Requires `unstable` feature which we filter out
             ("getrandom", "test-in-browser") => true,
+            ("path-dedot" | "path-absolutize", _) => true, // Multiple conflicting cache implementations
+            ("once_cell", "parking_lot") => true,
+            ("parking_lot", "stdweb" | "wasm-bindgen") => true,
+            ("instant", "js-sys" | "stdweb" | "wasm-bindgen" | "wasm-bindgen_rs" | "web-sys") => {
+                true
+            }
             ("encoding_rs", "simd-accel" | "any_all_workaround") => true,
+            // # Only enable default features
+            // Multiple backends; Unfortunately old versions default to the Windows-incompatible
+            // "termion" backend so even the very first check above fails...
+            ("tui", f) if f != "default" => true,
             // These are optional dependencies for the `rustc-dep-of-std` feature which break normal compilation
             (_, f)
                 if all_features.contains(&"rustc-dep-of-std")
@@ -420,11 +459,13 @@ fn determine_transitive_dependencies_and_max_features_inner(
         let new_crate = DetectedCrate {
             name: p.name().to_owned(),
             version: DetectedVersion::Release(p.version().to_string()),
-            features: all_features
-                .iter()
-                .filter(|f| feature_filter(p.name(), &all_features, f))
-                .map(|s| (*s).to_owned())
-                .collect(),
+            features: Some(
+                all_features
+                    .iter()
+                    .filter(|f| feature_filter(p.name(), &all_features, f))
+                    .map(|s| (*s).to_owned())
+                    .collect(),
+            ),
         };
         new_crates.insert(new_crate);
         // println!("{}", p.name());
@@ -436,30 +477,18 @@ fn determine_transitive_dependencies_and_max_features_inner(
     if new_crates == crates {
         // We've reached a fixed point
         info!("Reached fixed point for dependency graph");
-        Ok(crates)
+        Ok((crates, true))
     } else {
-        fs::write(&cargo_toml_path, generate_cargo_toml_content(&new_crates))?;
-        info!("Trying to compile extended dependency graph");
-        let output = Command::new("cargo")
-            .current_dir(cwd)
-            .arg(format!("+{}", ctx.rust_release.name()))
-            .arg("check")
-            .arg("--target")
-            .arg(ctx.target.name())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .output()?;
-        if output.status.success() {
-            info!("Successfully extended dependency graph");
-            // Try extending again
-            determine_transitive_dependencies_and_max_features_inner(ctx, cwd, new_crates)
-        } else {
-            warn!("Failed to extend dependency graph");
-            // println!("{}", cargo_toml_path.display());
-            // std::process::exit(0);
-            debug!("{}", generate_cargo_toml_content(&new_crates));
-            debug!("stderr: {}", String::from_utf8_lossy(&output.stderr));
-            Ok(crates)
+        info!("Extended dependency graph");
+        // Recursive call to try extending again; will also check if the current extension even
+        // compiles
+        match determine_transitive_dependencies_and_max_features_inner(ctx, cwd, new_crates) {
+            Ok(crates) => Ok(crates),
+            Err(e) => {
+                warn!("Failed to extend dependency graph: {}", e);
+                // Return crates before extension
+                Ok((crates, false))
+            }
         }
     }
 }
@@ -468,9 +497,11 @@ fn determine_transitive_dependencies_and_max_features(
     ctx: &Context,
     old_registry_index: &Option<PathBuf>,
     crates: HashSet<DetectedCrate>,
+    keep_tmpdir_on_fail: bool,
 ) -> Result<HashSet<DetectedCrate>> {
     let tmpdir = TempDir::new()?;
 
+    // Create empty `main.rs` which is required
     fs::create_dir(tmpdir.path().join("src"))?;
     fs::write(tmpdir.path().join("src/main.rs"), "fn main() {}")?;
 
@@ -500,7 +531,14 @@ fn determine_transitive_dependencies_and_max_features(
         fs::write(&cargo_config, cargo_config_content)?;
     }
 
-    determine_transitive_dependencies_and_max_features_inner(ctx, tmpdir.path(), crates)
+    let ret = determine_transitive_dependencies_and_max_features_inner(ctx, tmpdir.path(), crates);
+    // Two possibilities:
+    // - Initial compilation already fails (incidated by `Err` variant)
+    // - Or one of the exapansion steps failed (incidated by `Ok` variant with `false` in tuple)
+    if keep_tmpdir_on_fail && (ret.is_err() || matches!(ret, Ok((_, false)))) {
+        info!("Keeping tmpdir at {}", tmpdir.into_path().display());
+    }
+    ret.map(|(c, _)| c)
 }
 
 pub async fn generate_signatures_for_crates(
@@ -519,8 +557,12 @@ pub async fn generate_signatures_for_crates(
         })
         .transpose()?;
 
-    let crates =
-        determine_transitive_dependencies_and_max_features(ctx, &old_registry_index, crates)?;
+    let crates = determine_transitive_dependencies_and_max_features(
+        ctx,
+        &old_registry_index,
+        crates,
+        debug_crate_compilation.is_some(), // `keep_tmpdir_on_fail: bool`; not really clean...
+    )?;
     info!("Crates planned for signature generation:");
     for c in &crates {
         info!("  - {} {} (features: {:?})", c.name, c.version, c.features);
@@ -534,6 +576,7 @@ pub async fn generate_signatures_for_crates(
 
     let mut failed_crates = Vec::new();
     let mut skipped_benches_crates = Vec::new();
+    let mut used_default_features_crates = Vec::new();
     for cratee in crates {
         if let Some(c) = debug_crate_compilation {
             if cratee.name != c {
@@ -663,9 +706,8 @@ pub async fn generate_signatures_for_crates(
                                 .arg(&info.git.sha1),
                         )?;
 
-                        // TODO: For crates which are missing `path_in_vcs` we should either:
-                        //       - Search for the correct crate subdirectory in the repo
-                        //       - Or fall back to the crates.io tarball
+                        // TODO: For crates which are missing `path_in_vcs` we should be able to
+                        //       find the correct crate subdirectory in the repo
                         crate_dir = crate_checkout
                             .path()
                             .join(info.path_in_vcs.as_deref().unwrap_or(""));
@@ -676,18 +718,9 @@ pub async fn generate_signatures_for_crates(
 
                     if let Err(e) = try_clone() {
                         error!("Cloning failed: {}", e);
+                        error!("Falling back to crates.io source tarball...")
                     }
                 }
-
-                let gen_sigs = |skip_benches: bool| {
-                    compile_crate_and_generate_signatures(
-                        ctx,
-                        &cratee,
-                        &crate_dir,
-                        &old_registry_index,
-                        skip_benches,
-                    )
-                };
 
                 // Benches are a very common compilation error source since they often depend on
                 // nightly features and are handled somewhat special by cargo. (one example: resvg
@@ -695,10 +728,24 @@ pub async fn generate_signatures_for_crates(
                 // somehow doesn't get included by cargo)
                 // So to sidestep that first try without skipping benches. If that fails skip them.
                 let mut skipped_benches = false;
-                if let Err(e) = gen_sigs(false).or_else(|_| {
-                    skipped_benches = true;
-                    gen_sigs(true)
-                }) {
+                let mut used_default_features = false;
+                let mut gen_sigs = |skip_benches: bool, use_default_features: bool| {
+                    skipped_benches = skip_benches;
+                    used_default_features = use_default_features;
+                    compile_crate_and_generate_signatures(
+                        ctx,
+                        &cratee,
+                        &crate_dir,
+                        &old_registry_index,
+                        skip_benches,
+                        use_default_features,
+                    )
+                };
+
+                if let Err(e) = gen_sigs(false, false)
+                    .or_else(|_| gen_sigs(true, false))
+                    .or_else(|_| gen_sigs(true, true))
+                {
                     failed_crates.push(cratee);
                     error!(
                         "Failed to generate signatures for {} {}: {}\n{}",
@@ -707,6 +754,8 @@ pub async fn generate_signatures_for_crates(
                         e,
                         e.backtrace()
                     );
+                } else if used_default_features {
+                    used_default_features_crates.push(cratee);
                 } else if skipped_benches {
                     skipped_benches_crates.push(cratee);
                 }
@@ -736,9 +785,17 @@ pub async fn generate_signatures_for_crates(
     }
 
     if !skipped_benches_crates.is_empty() {
-        warn!("Benches compilation failed for:");
+        warn!("Had to skip benches compilation for:");
         for skipped in skipped_benches_crates {
             warn!("- {} {}", skipped.name, skipped.version);
+        }
+        warn!("Check the log for further details.");
+    }
+
+    if !used_default_features_crates.is_empty() {
+        warn!("Had to use default features (and skip benches compilation) for:");
+        for used_default in used_default_features_crates {
+            warn!("- {} {}", used_default.name, used_default.version);
         }
         warn!("Check the log for further details.");
     }
@@ -776,6 +833,7 @@ fn compile_crate_and_generate_signatures(
     crate_dir: &Path,
     old_registry_index: &Option<PathBuf>,
     skip_benches: bool,
+    use_default_features: bool,
 ) -> Result<()> {
     // Setup a Cargo "source replacement" to use the the crate registry index at an old state. This
     // is our best-effort attempt at replicating the Cargo.lock of the actual binary.
@@ -836,6 +894,8 @@ fn compile_crate_and_generate_signatures(
         //       https://github.com/rust-lang/cargo/issues/8010. Fortunately this isn't a
         //       must-have anymore since we can time-travel for the registry index.
         // .env("RUSTFLAGS", "--cap-lints allow")
+        .env_remove("CARGO")
+        .env("RUSTC_BOOTSTRAP", "1")
         .env("CARGO_TARGET_DIR", "./target") // Override target dir so we don't need to pay attention to workspaces
         .env("RUSTFLAGS", "--emit=obj") // TODO: Docs
         .env("XWIN_ARCH", "x86,x86_64")
@@ -849,10 +909,16 @@ fn compile_crate_and_generate_signatures(
         .arg("--profile")
         .arg(ctx.compiler_options.profile.name())
         .arg("--target")
-        .arg(ctx.target.name())
-        .arg("--features")
-        // TODO: Currently this may still miss features activated by other features which are enabled in the final dependency graph; Need to query guppy for activated features (ideally for the specific target platform)
-        .arg(cratee.features.join(","));
+        .arg(ctx.target.name());
+
+    if !use_default_features {
+        match &cratee.features {
+            // TODO: Use `--no-default-features` here before listing our features...
+            // TODO: Currently this may still miss features activated by other features which are enabled in the final dependency graph; Need to query guppy for activated features (ideally for the specific target platform)
+            Some(feats) => cmd.arg("--features").arg(feats.join(",")),
+            None => cmd.arg("--all-features"),
+        };
+    }
 
     if skip_benches {
         cmd.arg("--lib")
@@ -888,7 +954,9 @@ fn compile_crate_and_generate_signatures(
                 .map(|o| o.value().to_owned()),
         ),
         // Explicitly disable symbol stripping; Although this probably isn't set anyways...
-        ("STRIP", Some("none".to_owned())),
+        // TODO: This option was introduced in in Rust 1.59 (Feb. 24, 2022) so we mustn't enable it
+        //       for older releases.
+        // ("STRIP", Some("none".to_owned())),
     ];
     for (opt, opt_val) in options {
         if let Some(val) = opt_val {
@@ -930,12 +998,7 @@ fn compile_crate_and_generate_signatures(
 }
 
 fn exec_cmd(cmd: &mut Command) -> Result<()> {
-    ensure!(
-        cmd.status()?.success(),
-        "{:?} {:?}",
-        cmd.get_program(),
-        cmd.get_args()
-    );
+    ensure!(cmd.status()?.success(), "failed command: {:?}", cmd);
     Ok(())
 }
 
@@ -979,7 +1042,7 @@ pub fn detect_used_crates(bin: &[u8]) -> Result<HashSet<DetectedCrate>> {
             DetectedCrate {
                 name: str::from_utf8(name).unwrap().to_owned(),
                 version: DetectedVersion::Release(str::from_utf8(version).unwrap().to_owned()),
-                features: Vec::new(),
+                features: None,
             }
         })
         .collect();
@@ -994,7 +1057,7 @@ pub fn detect_used_crates(bin: &[u8]) -> Result<HashSet<DetectedCrate>> {
             DetectedCrate {
                 name: str::from_utf8(name).unwrap().to_owned(),
                 version: DetectedVersion::Git(str::from_utf8(commit).unwrap().to_owned()),
-                features: Vec::new(),
+                features: None,
             }
         })
         .collect();
@@ -1013,14 +1076,16 @@ pub fn detect_used_crates(bin: &[u8]) -> Result<HashSet<DetectedCrate>> {
     Ok(crates)
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DetectedCrate {
     name: String,
     version: DetectedVersion,
-    features: Vec<String>,
+    // NOTE: If `features` is `None` (when crate graph expansion fails) we will fall back to using
+    //       `--all-features` during crate compilation
+    features: Option<Vec<String>>,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DetectedVersion {
     Release(String),
     Git(String),

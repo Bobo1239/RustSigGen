@@ -20,7 +20,8 @@ struct Args {
     #[arg(short, long)]
     keep_extracted_files: bool,
     /// Only compile specific dependency crate and keep working directory; for debugging `crate`
-    /// mode compilation failures
+    /// mode compilation failures; also keeps tmpdir used for dependancy graph expansion if that
+    /// failed
     #[arg(short, long)]
     debug_crate: Option<String>,
     #[arg(short, long)]

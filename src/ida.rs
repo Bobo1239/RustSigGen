@@ -103,6 +103,9 @@ pub fn generate_signatures(
         let output = sigmake_command.output()?;
         // TODO: This is a workaround for an IDA bug and should be removed in the future; After
         //       conflict resolution sigmake shouldn't be able to fail again...
+        // NOTE: These weird conflicts also appear to lead to recognized functions in IDA which
+        //       don't get renamed. (so they're marked as a library function but their name stays
+        //       like `sub_...`)
         if !output.status.success() {
             let output_stderr = str::from_utf8(&output.stderr)?;
             info!("sigmake output: {}", output_stderr);
