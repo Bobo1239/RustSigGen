@@ -1,5 +1,5 @@
 [package]
-name = "signature_generator"
+name = "rust-sig-gen"
 authors = ["Boris-Chengbiao Zhou <bobo1239@web.de>"]
 version = "0.1.0"
 edition = "2021"

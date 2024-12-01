@@ -14,5 +14,5 @@ pyo3 = { version = "0.23.2", features = [
 ] }
 tokio = "1.38.0"
 
-signature_generator = { path = ".." }
+rust-sig-gen = { path = ".." }
 pyo3-log = "0.12.0"

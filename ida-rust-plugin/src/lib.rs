@@ -3,7 +3,7 @@ use std::{fs, path::PathBuf, sync::OnceLock};
 use pyo3::prelude::*;
 use tokio::runtime::Runtime;
 
-use signature_generator::{ida, std_sigs};
+use rust_sig_gen::{ida, std_sigs};
 
 fn tokio() -> &'static Runtime {
     static RT: OnceLock<Runtime> = OnceLock::new();

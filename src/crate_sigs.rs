@@ -60,7 +60,7 @@ static CRATES_IO_USER_AGENT: &str = concat!(
 );
 
 // Dummy crate name used during dependecy graph creation/expansion
-const DUMMY_CRATE_NAME: &str = "signature_generator_dummy_package";
+const DUMMY_CRATE_NAME: &str = "rust_sig_gen_dummy_package";
 
 pub struct Context<'a> {
     pub rust_release: &'a Release,

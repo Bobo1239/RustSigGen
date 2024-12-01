@@ -4,7 +4,7 @@ use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use log::*;
 
-use signature_generator::{
+use rust_sig_gen::{
     crate_sigs::{self, Context},
     ida, std_sigs, CompilerOptions,
 };
