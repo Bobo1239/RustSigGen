@@ -49,22 +49,6 @@ pub fn extract_object_files_to_tmp_dir(
                 file.read_to_string(&mut commit_hash)?;
                 assert_eq!(commit_hash, release_manifest.commit_hash);
             }
-            p if p.extension() == Some(OsStr::new("rlib")) => {
-                let mut buf = Vec::new();
-                file.read_to_end(&mut buf)?;
-
-                let file = object::read::archive::ArchiveFile::parse(&*buf)?;
-                for member in file.members() {
-                    let member = member?;
-                    let name = str::from_utf8(member.name())?;
-
-                    if name.ends_with(".o") {
-                        let data = member.data(&*buf)?;
-                        fs::write(tmp_dir.path().join(name.replace('/', "\\")), data)?;
-                        // let object_file = object::File::parse(data)?;
-                    }
-                }
-            }
             p if p.extension() == Some(OsStr::new("rlib"))
                 || p.extension() == Some(OsStr::new("a")) =>
             {
