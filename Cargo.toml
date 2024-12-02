@@ -3,6 +3,7 @@ name = "rust-sig-gen"
 authors = ["Boris-Chengbiao Zhou <bobo1239@web.de>"]
 version = "0.1.0"
 edition = "2021"
+license = "Apache-2.0 OR MIT"
 
 [dependencies]
 anyhow = "1.0.86"
